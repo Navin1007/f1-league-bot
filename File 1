@@ -1,0 +1,157 @@
+import discord
+from discord import app_commands
+from discord.ext import commands
+import json
+import os
+
+TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"
+
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+DATA_FILE = "drivers.json"
+CONFIG_FILE = "config.json"
+TIER_ONE_LIMIT = 4 * 60 + 28  # 4:28.000 in seconds
+
+# ------------------------
+# Utility Functions
+# ------------------------
+
+def load_json(file):
+    try:
+        with open(file, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_json(file, data):
+    with open(file, "w") as f:
+        json.dump(data, f, indent=4)
+
+drivers = load_json(DATA_FILE)
+config = load_json(CONFIG_FILE)
+
+def time_to_seconds(t):
+    if t == "No Time":
+        return 9999
+    m, s = t.split(":")
+    return int(m) * 60 + float(s)
+
+def create_embed():
+    sorted_drivers = sorted(drivers.items(), key=lambda x: time_to_seconds(x[1]["time"]))
+
+    tier1 = []
+    tier2 = []
+
+    for name, info in sorted_drivers:
+        seconds = time_to_seconds(info["time"])
+        status = "✅ Signed" if info["signed"] else "❌ Unsigned"
+        line = f"{name} – {info['time']} – {status}"
+
+        if seconds <= TIER_ONE_LIMIT:
+            tier1.append(line)
+        else:
+            tier2.append(line)
+
+    embed = discord.Embed(
+        title="🏁 F1 25 League Drivers",
+        color=discord.Color.red()
+    )
+
+    embed.add_field(
+        name="🔥 Tier 1 (4:28.000 and under)",
+        value="\n".join(tier1) if tier1 else "No drivers yet.",
+        inline=False
+    )
+
+    embed.add_field(
+        name="⚡ Tier 2 (Above 4:28.000)",
+        value="\n".join(tier2) if tier2 else "No drivers yet.",
+        inline=False
+    )
+
+    embed.set_footer(text="Updates automatically when admins change data.")
+
+    return embed
+
+async def update_leaderboard():
+    if "channel_id" not in config or "message_id" not in config:
+        return
+
+    channel = bot.get_channel(config["channel_id"])
+    if not channel:
+        return
+
+    try:
+        message = await channel.fetch_message(config["message_id"])
+        await message.edit(embed=create_embed())
+    except:
+        pass
+
+# ------------------------
+# Bot Ready
+# ------------------------
+
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"Logged in as {bot.user}")
+
+# ------------------------
+# Setup Command (Run Once)
+# ------------------------
+
+@bot.tree.command(name="setupdrivers", description="Create the fixed drivers leaderboard message")
+async def setupdrivers(interaction: discord.Interaction):
+    embed = create_embed()
+    message = await interaction.channel.send(embed=embed)
+
+    config["channel_id"] = interaction.channel.id
+    config["message_id"] = message.id
+    save_json(CONFIG_FILE, config)
+
+    await interaction.response.send_message("Drivers leaderboard created!", ephemeral=True)
+
+# ------------------------
+# Admin Commands
+# ------------------------
+
+@bot.tree.command(name="adddriver", description="Add a new driver")
+async def adddriver(interaction: discord.Interaction, name: str):
+    drivers[name] = {"time": "No Time", "signed": False}
+    save_json(DATA_FILE, drivers)
+    await update_leaderboard()
+    await interaction.response.send_message(f"{name} added.", ephemeral=True)
+
+@bot.tree.command(name="settime", description="Set driver's best lap time (M:SS.mmm)")
+async def settime(interaction: discord.Interaction, name: str, time: str):
+    if name in drivers:
+        drivers[name]["time"] = time
+        save_json(DATA_FILE, drivers)
+        await update_leaderboard()
+        await interaction.response.send_message("Time updated.", ephemeral=True)
+    else:
+        await interaction.response.send_message("Driver not found.", ephemeral=True)
+
+@bot.tree.command(name="sign", description="Sign a driver")
+async def sign(interaction: discord.Interaction, name: str):
+    if name in drivers:
+        drivers[name]["signed"] = True
+        save_json(DATA_FILE, drivers)
+        await update_leaderboard()
+        await interaction.response.send_message("Driver signed.", ephemeral=True)
+    else:
+        await interaction.response.send_message("Driver not found.", ephemeral=True)
+
+@bot.tree.command(name="unsign", description="Unsign a driver")
+async def unsign(interaction: discord.Interaction, name: str):
+    if name in drivers:
+        drivers[name]["signed"] = False
+        save_json(DATA_FILE, drivers)
+        await update_leaderboard()
+        await interaction.response.send_message("Driver unsigned.", ephemeral=True)
+    else:
+        await interaction.response.send_message("Driver not found.", ephemeral=True)
+
+bot.run(TOKEN)
